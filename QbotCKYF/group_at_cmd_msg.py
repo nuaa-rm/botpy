@@ -23,7 +23,7 @@ MEMBER_DATABASE_ID = test_config["MEMBER_DATABASE_ID"]
 LOG_DATABASE_ID = test_config["LOG_DATABASE_ID"]
 PROGRESS_DATABASE_ID = test_config["PROGRESS_DATABASE_ID"]
 # member_openid = '8E2E8922A7072119506D8361B78181E3'
-member_data = []
+# global member_data
 
 headers = {
     "Authorization": "Bearer " + NOTION_TOKEN,
@@ -74,12 +74,21 @@ def update_page(page_id: str, data: dict):
     return res
 
 def init_qq_id_pair(qq_number, member_openid):
-    entry = get_entry_by_qq(qq_number)
+    try:
+        entry = get_entry_by_qq(qq_number)
+    except (KeyError, IndexError, TypeError) as e:
+        # 捕获可能的键错误或索引错误，跳过这个条目
+        print(f"Skipping entry due to error: {e}")
+        return
     data = {
         "member_openid": {'type': 'rich_text',
                           'rich_text': [{'type': 'text', 'text': {'content': member_openid}}]},
     }
     update_page(entry["id"], data)
+
+
+    print(f"Init command: {qq_number}")
+
 
 # 创建Notion页面的函数
 def create_log(data: dict):
@@ -105,6 +114,8 @@ def create_progress(data: dict):
 
 # 处理命令并根据命令进行相关操作
 def process_command(message):
+    global member_data
+    member_data = get_pages()
     notion_userid: str
     group_name: str
     result = match_command(message.content)
@@ -116,11 +127,12 @@ def process_command(message):
         if command == CommandType.INIT.value:
             qq_number = extract_numbers(remaining_str)
             init_qq_id_pair(qq_number, message.author.member_openid)
-            print(f"Init command: {remaining_str}")
         else:
             user_info = get_entry_by_member_openid(message.author.member_openid)
             notion_userid = user_info['created_by']['id']
             group_name = user_info['properties']['组别']['select']['name']
+
+
 
         if command == CommandType.LOG.value:
             # 如果命令是/log，创建Notion页面
@@ -188,8 +200,14 @@ def get_entry_by_member_openid(member_openid):
 def get_entry_by_qq(qq_number):
     # 遍历所有记录
     for entry in member_data:
-        if entry['properties']['qq号']['rich_text'][0]['text']['content'] == qq_number:
-            return entry  # 返回找到的整条记录
+        try:
+            if entry['properties']['qq号']['rich_text'] and \
+                    entry['properties']['qq号']['rich_text'][0]['text']['content'] == qq_number:
+                return entry  # 返回找到的整条记录
+        except (KeyError, IndexError, TypeError) as e:
+            # 捕获可能的键错误或索引错误，跳过这个条目
+            print(f"Skipping entry due to error: {e}")
+            continue
     return None  # 如果没有找到对应的QQ号
 
 def get_user_and_group_by_qq(qq_number):
@@ -239,12 +257,22 @@ class MyClient(botpy.Client):
 
     async def on_group_at_message_create(self, message: GroupMessage):
         # _log.info(member_openid == message.author.member_openid)
-        messageResult = await message._api.post_group_message(
-            group_openid=message.group_openid,
-              msg_type=0,
-              msg_id=message.id,
-              content=f"收到了消息：{message.content}")
-        process_command(message)
+        try:
+            process_command(message)
+            messageResult = await message._api.post_group_message(
+                group_openid=message.group_openid,
+                msg_type=0,
+                msg_id=message.id,
+                content=f"收到了消息：{message.content}")
+        except Exception as e:
+            print(f"Error processing command: {e}")
+            messageResult = await message._api.post_group_message(
+                group_openid=message.group_openid,
+                msg_type=0,
+                msg_id=message.id,
+                content=f"收到了消息：{e}")
+
+
         _log.info(messageResult)
 
     # async def on_group_at_message(self, message: GroupMessage):
@@ -263,7 +291,6 @@ if __name__ == "__main__":
     # intents = botpy.Intents.none()
     # intents.public_messages=True
 
-    member_data = get_pages()
     # 通过kwargs，设置需要监听的事件通道
     intents = botpy.Intents(public_messages=True)
     client = MyClient(intents=intents)
